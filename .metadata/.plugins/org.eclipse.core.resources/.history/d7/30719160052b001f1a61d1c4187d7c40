@@ -1,0 +1,503 @@
+/*
+ * tasks.c
+ *
+ *  Created on: May 8, 2024
+ *      Author: Viktor
+ */
+
+/* Include necessary header files */
+#include "application_tasks.h"
+#include <string.h>
+#include <stdio.h>
+
+/* Declare external variables used in this file */
+extern ADC_HandleTypeDef hadc1;
+extern RTC_HandleTypeDef hrtc;
+
+extern SIM800_Handle_t sim800h;
+extern NEO6M_Handle_t neo6mh;
+
+extern QueueHandle_t xCommandQueue;
+extern QueueHandle_t xSMSToSendQueue;
+extern QueueHandle_t xNumbersToSendGPSQueue;
+extern QueueHandle_t xNumbersToSendVoltageQueue;
+extern QueueHandle_t xTimeToRTCAlarmQueue;
+extern QueueHandle_t xGPSCoordinatesQueue;
+extern QueueHandle_t xADCValueQueue;
+
+extern TaskHandle_t xSim800ResetTaskHandle;
+extern TaskHandle_t xCmdProcessTaskHandle;
+extern TaskHandle_t xSendGPSTaskHandle;
+extern TaskHandle_t xSendVoltageTaskHandle;
+extern TaskHandle_t xSendSMSTaskHandle;
+extern TaskHandle_t xConfigRTCAlarmTaskHandle;
+extern TaskHandle_t xSendCurrentAlarmTaskHandle;
+
+extern char phoneNumberForNotify[PHONE_NUMBER_MAX_LENGHT];
+
+
+/**
+ * @brief  Task function for resetting and initializing the SIM800 module.
+ * @param  pvParameters Not used
+ * @retval None
+ */
+static void vSim800ResetTask( void * pvParameters )
+{
+    /* Declare a variable to store the network registration status */
+    SIM800_NetworkRegStatus_t status;
+
+    /* Infinite loop */
+    while(1)
+    {
+    	/* Reset the SIM800 module */
+        HAL_GPIO_WritePin(SIM_PWR_CNTRL_GPIO_Port, SIM_PWR_CNTRL_Pin, SET);
+        HAL_Delay(1000);
+        HAL_GPIO_WritePin(SIM_PWR_CNTRL_GPIO_Port, SIM_PWR_CNTRL_Pin, RESET);
+
+        /* Start receiving data from the SIM800 module */
+        if( SIM800_ManageReceiving(&sim800h, ENABLE) != SIM800_OK )
+        {
+            Error_Handler();
+        }
+
+        /* Wait for the SIM800 module to register on the network */
+        status = SIM800_GetNetworkRegStatus(&sim800h);
+        while( status != SIM800_Registered_HomeNetwork &&
+               status != SIM800_Registered_Roaming)
+        {
+            status = SIM800_GetNetworkRegStatus(&sim800h);
+            HAL_Delay(500);
+        }
+
+        /* Delete all existing SMS messages to free memory */
+        if( SIM800_DeleteAllSMSMessages(&sim800h) != SIM800_OK )
+        {
+            Error_Handler();
+        }
+
+        /* Set SMS text mode */
+        if( SIM800_SetSMSTextMode(&sim800h) != SIM800_OK )
+        {
+            Error_Handler();
+        }
+
+        /* Enable SMS notifications callback */
+        if( SIM800_ManageSMSNotifications(&sim800h, ENABLE) != SIM800_OK )
+        {
+            Error_Handler();
+        }
+
+        /* Wait for notification to reset the module again */
+        ulTaskNotifyTake( 0, portMAX_DELAY );
+    }
+}
+
+/**
+ * @brief  Task function for processing commands received via SMS.
+ * @param  pvParameters Not used
+ * @retval None
+ */
+static void vCmdProcessTask( void * pvParameters )
+{
+    /*
+     * Expected command format: <command>:<argument>
+     */
+    SMS_t cmd_buff = {0};
+    char *pArgument;
+    uint32_t command=0, argument=0;
+    char *error = "Unknown command!";
+
+    while(1)
+    {
+        /* Wait for a command to be received in the queue */
+        xQueueReceive(xCommandQueue, &cmd_buff, portMAX_DELAY);
+
+        /* Parse the command and argument from the message */
+        pArgument = strtok((char *)cmd_buff.message, ":");
+        command = strtol((char *)cmd_buff.message, NULL, 10);
+
+        switch(command)
+        {
+        case 1:
+            /* Send the phone number to the queue for sending GPS coordinates */
+            xQueueSend( xNumbersToSendGPSQueue, cmd_buff.number, 0 );
+            break;
+        case 2:
+            /* Send the phone number to the queue for sending voltage */
+            xQueueSend( xNumbersToSendVoltageQueue, cmd_buff.number, 0 );
+            break;
+        case 3:
+            /* Set the phone number for notification and send the alarm time to the queue */
+            pArgument = strtok(NULL, ":");
+            argument = strtol(pArgument, NULL, 10);
+            strcpy(phoneNumberForNotify, (char *)cmd_buff.number);
+            xQueueSend(xTimeToRTCAlarmQueue, &argument, 0);
+            break;
+        case 4:
+            /* Notify the task to send the current alarm time */
+            xTaskNotifyGive(xSendCurrentAlarmTaskHandle);
+            break;
+        case 5:
+            /* Deactivate the RTC alarm */
+            HAL_RTC_DeactivateAlarm(&hrtc, RTC_ALARM_A);
+            break;
+        default:
+            /* Send an error message if the command is unknown */
+            strcpy((char *)cmd_buff.message, error);
+            send_sms(&cmd_buff);
+        }
+    }
+}
+
+/**
+ * @brief  Task function for sending GPS coordinates to a specified phone number.
+ * @param  pvParameters Not used
+ * @retval None
+ */
+static void vSendGPSTask( void * pvParameters )
+{
+    Coordinates_t cor = {0};
+    SMS_t sms = {0};
+
+    while(1)
+    {
+        /* Wait for a phone number to be received in the queue */
+        xQueueReceive(xNumbersToSendGPSQueue, sms.number, portMAX_DELAY);
+
+        /* Enable power to the GPS module */
+//        HAL_GPIO_WritePin(NEO6_PWR_CNTRL_GPIO_Port, NEO6_PWR_CNTRL_Pin, RESET);
+
+        /* Add RMC message type to the expected message list */
+        NEO6M_AddExpectedMessage(&neo6mh, RMC);
+
+        /* Wait for GPS coordinates to be received in the queue */
+        xQueueReceive(xGPSCoordinatesQueue, &cor, portMAX_DELAY);
+
+        /* Remove RMC message type from the expected message list */
+        NEO6M_RemoveExpectedMessage(&neo6mh, RMC);
+
+        /* Disable power to the GPS module */
+//        HAL_GPIO_WritePin(NEO6_PWR_CNTRL_GPIO_Port, NEO6_PWR_CNTRL_Pin, SET);
+
+        /* Format the GPS coordinates as a string */
+        sprintf((char *)sms.message, "%f %f", cor.latitude, cor.longitude);
+
+        /* Send the SMS with GPS coordinates */
+        send_sms(&sms);
+    }
+}
+
+/**
+ * @brief  Task function for sending the voltage value to a specified phone number.
+ * @param  pvParameters Not used
+ * @retval None
+ */
+static void vSendVoltageTask( void * pvParameters )
+{
+    SMS_t sms = {0};
+    uint32_t adc_raw_value = 0;
+    float coefficient = 6.6 / 4095, voltage = 0;
+
+    while(1)
+    {
+        /* Wait for a phone number to be received in the queue */
+        xQueueReceive(xNumbersToSendVoltageQueue, sms.number, portMAX_DELAY);
+
+        /* Start ADC conversion in interrupt mode */
+        HAL_ADC_Start_IT(&hadc1);
+
+        /* Wait for ADC value to be received in the queue */
+        xQueueReceive(xADCValueQueue, &adc_raw_value, portMAX_DELAY);
+
+        /* Calculate voltage from ADC raw value */
+        voltage = adc_raw_value * coefficient;
+
+        /* Format the voltage value as a string */
+        sprintf((char *)sms.message, "Voltage: %.2fV", voltage);
+
+        /* Send the SMS with voltage value */
+        send_sms(&sms);
+    }
+}
+
+/**
+ * @brief  Task function for sending SMS messages.
+ * @param  pvParameters Not used
+ * @retval None
+ */
+static void vSendSMSTask( void * pvParameters )
+{
+    SMS_t sms = {0};
+
+    while(1)
+    {
+        /* Wait for an SMS message to be received in the queue */
+        xQueueReceive(xSMSToSendQueue, &sms, portMAX_DELAY);
+
+        /* Send the SMS message */
+        SIM800_SendSMSMessage(&sim800h, (char *)sms.number, (char *)sms.message);
+    }
+}
+
+/**
+ * @brief  Task function for configuring the RTC alarm.
+ * @param  pvParameters Not used
+ * @retval None
+ */
+static void vConfigRTCAlarmTask( void * pvParameters )
+{
+    /*
+     * Expected time format: hhmm
+     * Max time: 2359
+     */
+    uint32_t time=0;
+    uint8_t hrs=0, min=0;
+    RTC_AlarmTypeDef sAlarm;
+    HAL_StatusTypeDef status = HAL_OK;
+
+    while(1)
+    {
+        /* Wait for an alarm time to be received in the queue */
+        xQueueReceive(xTimeToRTCAlarmQueue, &time, portMAX_DELAY);
+
+        /* Parse the hours and minutes from the received time */
+        if( time > 2359 )
+        {
+            hrs = 23;
+            min = 59;
+        } else
+        {
+            hrs = time / 100;
+            min = time - hrs * 100;
+        }
+
+        /* Configure the RTC alarm structure */
+        sAlarm.AlarmTime.Hours = hrs;
+        sAlarm.AlarmTime.Minutes = min;
+        sAlarm.AlarmTime.Seconds = 0;
+        sAlarm.AlarmTime.SubSeconds = 0;
+        sAlarm.AlarmTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
+        sAlarm.AlarmTime.StoreOperation = RTC_STOREOPERATION_RESET;
+        sAlarm.AlarmMask = RTC_ALARMMASK_DATEWEEKDAY;
+        sAlarm.AlarmSubSecondMask = RTC_ALARMSUBSECONDMASK_ALL;
+        sAlarm.AlarmDateWeekDaySel = RTC_ALARMDATEWEEKDAYSEL_DATE;
+        sAlarm.AlarmDateWeekDay = 1;
+        sAlarm.Alarm = RTC_ALARM_A;
+
+        /* Deactivate the existing RTC alarm */
+        status = HAL_RTC_DeactivateAlarm(&hrtc, RTC_ALARM_A);
+        if(status != HAL_OK)
+        {
+            Error_Handler();
+        }
+
+        /* Set the new RTC alarm */
+        status = HAL_RTC_SetAlarm_IT(&hrtc, &sAlarm, RTC_FORMAT_BIN);
+        if(status != HAL_OK)
+        {
+            Error_Handler();
+        }
+    }
+}
+
+/**
+ * @brief  Task function for sending the current RTC alarm time.
+ * @param  pvParameters Not used
+ * @retval None
+ */
+static void vSendCurrentAlarmTask( void * pvParameters )
+{
+    RTC_AlarmTypeDef sAlarm;
+    uint32_t hrs = 0, min = 0, sec = 0;
+    SMS_t sms = {0};
+    HAL_StatusTypeDef status = HAL_OK;
+    char message_buff[100];
+
+    while(1)
+    {
+        /* Wait for a notification to send the current alarm time */
+        ulTaskNotifyTake(xSendCurrentAlarmTaskHandle, portMAX_DELAY);
+
+        /* Check if a phone number for notification is set */
+        if( phoneNumberForNotify[0] == '+' )
+        {
+            /* Get the current RTC alarm settings */
+            status = HAL_RTC_GetAlarm(&hrtc, &sAlarm, RTC_ALARM_A, RTC_FORMAT_BIN);
+            if(status != HAL_OK)
+            {
+                Error_Handler();
+            }
+
+            /* Extract the alarm time components */
+            hrs = ( uint32_t )sAlarm.AlarmTime.Hours;
+            min = ( uint32_t )sAlarm.AlarmTime.Minutes;
+            sec = ( uint32_t )sAlarm.AlarmTime.Seconds;
+
+            /* Format the alarm time as a string */
+            sprintf(message_buff, "Current alarm\n"
+                                  "Time: %02ld:%02ld:%02ld", hrs, min, sec);
+
+            /* Set the phone number and message for the SMS */
+            strcpy((char *)sms.number, phoneNumberForNotify);
+            strcpy((char *)sms.message, message_buff);
+
+            /* Send the SMS with the current alarm time */
+            send_sms(&sms);
+        }
+    }
+}
+
+/**
+ * @brief  Idle hook function for putting the system into sleep mode.
+ * @param  None
+ * @retval None
+ */
+void vApplicationIdleHook( void )
+{
+    HAL_PWR_EnterSLEEPMode(PWR_MAINREGULATOR_ON, PWR_SLEEPENTRY_WFI);
+}
+
+/**
+ * @brief  Function for creating all the application tasks.
+ * @param  None
+ * @retval None
+ */
+void create_tasks(void)
+{
+    BaseType_t xReturned;
+
+    /* Create the SIM800 reset task */
+    xReturned  = xTaskCreate(
+            vSim800ResetTask,             /* Function that implements the task */
+            "SIM800 reset task",          /* Text name for the task */
+            400,                          /* Stack size in words, not bytes */
+            NULL,                         /* Parameter passed into the task */
+            4,                            /* Priority at which the task is created */
+            &xSim800ResetTaskHandle );    /* Used to pass out the created task's handle */
+
+    if( xReturned != pdPASS )
+    {
+        Error_Handler();
+    }
+
+    /* Create the command process task */
+    xReturned  = xTaskCreate(
+            vCmdProcessTask,              /* Function that implements the task */
+            "Command process task",       /* Text name for the task */
+            400,                          /* Stack size in words, not bytes */
+            NULL,                         /* Parameter passed into the task */
+            3,                            /* Priority at which the task is created */
+            &xCmdProcessTaskHandle );     /* Used to pass out the created task's handle */
+
+    if( xReturned != pdPASS )
+    {
+        Error_Handler();
+    }
+
+    /* Create the task for sending GPS coordinates */
+    xReturned  = xTaskCreate(
+            vSendGPSTask,"Send GPS coordinates task",  /* Text name for the task */
+            400,                          /* Stack size in words, not bytes */
+            NULL,                         /* Parameter passed into the task */
+            1,                            /* Priority at which the task is created */
+            &xSendGPSTaskHandle );        /* Used to pass out the created task's handle */
+
+    if( xReturned != pdPASS )
+    {
+        Error_Handler();
+    }
+
+    /* Create the task for sending voltage value */
+    xReturned  = xTaskCreate(
+            vSendVoltageTask,             /* Function that implements the task */
+            "Send voltage task",          /* Text name for the task */
+            400,                          /* Stack size in words, not bytes */
+            NULL,                         /* Parameter passed into the task */
+            1,                            /* Priority at which the task is created */
+            &xSendVoltageTaskHandle );    /* Used to pass out the created task's handle */
+
+    if( xReturned != pdPASS )
+    {
+        Error_Handler();
+    }
+
+    /* Create the task for sending SMS messages */
+    xReturned  = xTaskCreate(
+            vSendSMSTask,                 /* Function that implements the task */
+            "Send SMS task",              /* Text name for the task */
+            400,                          /* Stack size in words, not bytes */
+            NULL,                         /* Parameter passed into the task */
+            2,                            /* Priority at which the task is created */
+            &xSendSMSTaskHandle );        /* Used to pass out the created task's handle */
+
+    if( xReturned != pdPASS )
+    {
+        Error_Handler();
+    }
+
+    /* Create the task for configuring the RTC alarm */
+    xReturned  = xTaskCreate(
+            vConfigRTCAlarmTask,          /* Function that implements the task */
+            "Config RTC alarm",           /* Text name for the task */
+            400,                          /* Stack size in words, not bytes */
+            NULL,                         /* Parameter passed into the task */
+            1,                            /* Priority at which the task is created */
+            &xConfigRTCAlarmTaskHandle ); /* Used to pass out the created task's handle */
+
+    if( xReturned != pdPASS )
+    {
+        Error_Handler();
+    }
+
+    /* Create the task for sending the current RTC alarm time */
+    xReturned  = xTaskCreate(
+            vSendCurrentAlarmTask,        /* Function that implements the task */
+            "Send RTC alarm",             /* Text name for the task */
+            400,                          /* Stack size in words, not bytes */
+            NULL,                         /* Parameter passed into the task */
+            1,                            /* Priority at which the task is created */
+            &xSendCurrentAlarmTaskHandle ); /* Used to pass out the created task's handle */
+
+    if( xReturned != pdPASS )
+    {
+        Error_Handler();
+    }
+}
+
+/**
+ * @brief  Function for resetting the SIM800 module.
+ * @param  None
+ * @retval None
+ */
+void reset_sim800(void)
+{
+    /* Notify the SIM800 reset task to initiate a reset */
+    xTaskNotifyGive( xSim800ResetTaskHandle );
+}
+
+/**
+ * @brief  Function for sending an SMS message.
+ * @param  sms Pointer to the SMS structure containing the message and recipient number
+ * @retval None
+ */
+void send_sms(SMS_t *sms)
+{
+    /* Send the SMS message to the queue for transmission */
+    xQueueSend(xSMSToSendQueue, sms, 0);
+}
+
+/**
+ * @brief  Stack overflow hook function.
+ * @param  xTask Handle of the task that caused the stack overflow
+ * @param  pcTaskName Name of the task that caused the stack overflow
+ * @retval None
+ */
+void vApplicationStackOverflowHook( TaskHandle_t xTask,
+                                    char *pcTaskName )
+{
+    /* Infinite loop in case of stack overflow */
+    while(1)
+    {
+
+    }
+}

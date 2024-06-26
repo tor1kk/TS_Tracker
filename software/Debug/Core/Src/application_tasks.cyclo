@@ -1,0 +1,12 @@
+../Core/Src/application_tasks.c:44:13:vSim800ResetTask	7
+../Core/Src/application_tasks.c:100:13:vCmdProcessTask	6
+../Core/Src/application_tasks.c:157:13:vSendGPSTask	1
+../Core/Src/application_tasks.c:195:13:vSendVoltageTask	1
+../Core/Src/application_tasks.c:228:13:vSendSMSTask	1
+../Core/Src/application_tasks.c:247:13:vConfigRTCAlarmTask	4
+../Core/Src/application_tasks.c:308:13:vSendCurrentAlarmTask	3
+../Core/Src/application_tasks.c:355:6:vApplicationIdleHook	1
+../Core/Src/application_tasks.c:365:6:create_tasks	8
+../Core/Src/application_tasks.c:472:6:reset_sim800	1
+../Core/Src/application_tasks.c:483:6:send_sms	1
+../Core/Src/application_tasks.c:495:6:vApplicationStackOverflowHook	1

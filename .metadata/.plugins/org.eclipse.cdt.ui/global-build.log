@@ -1,0 +1,37 @@
+13:40:32 **** Incremental Build of configuration Debug for project software ****
+make -j4 all 
+arm-none-eabi-gcc "../Core/Src/application_tasks.c" -mcpu=cortex-m4 -std=gnu11 -g3 -DDEBUG -DUSE_HAL_DRIVER -DSTM32F401xC -c -I../Core/Inc -I"C:/Users/Viktor/Desktop/labaratorni/Projects/TS_Tracker/software/FreeRTOS/Source/portable/GCC/ARM_CM4F" -I"C:/Users/Viktor/Desktop/labaratorni/Projects/TS_Tracker/software/FreeRTOS/Source/include" -I../Drivers/STM32F4xx_HAL_Driver/Inc -I../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I../Drivers/CMSIS/Include -O0 -ffunction-sections -fdata-sections -Wall -fstack-usage -fcyclomatic-complexity -MMD -MP -MF"Core/Src/application_tasks.d" -MT"Core/Src/application_tasks.o" --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -o "Core/Src/application_tasks.o"
+arm-none-eabi-gcc "../Core/Src/main.c" -mcpu=cortex-m4 -std=gnu11 -g3 -DDEBUG -DUSE_HAL_DRIVER -DSTM32F401xC -c -I../Core/Inc -I"C:/Users/Viktor/Desktop/labaratorni/Projects/TS_Tracker/software/FreeRTOS/Source/portable/GCC/ARM_CM4F" -I"C:/Users/Viktor/Desktop/labaratorni/Projects/TS_Tracker/software/FreeRTOS/Source/include" -I../Drivers/STM32F4xx_HAL_Driver/Inc -I../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I../Drivers/CMSIS/Include -O0 -ffunction-sections -fdata-sections -Wall -fstack-usage -fcyclomatic-complexity -MMD -MP -MF"Core/Src/main.d" -MT"Core/Src/main.o" --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -o "Core/Src/main.o"
+In file included from ../Core/Inc/main.h:39,
+                 from ../Core/Inc/application_tasks.h:11,
+                 from ../Core/Src/application_tasks.c:9:
+../Core/Src/application_tasks.c: In function 'vSendCurrentAlarmTask':
+C:/Users/Viktor/Desktop/labaratorni/Projects/TS_Tracker/software/FreeRTOS/Source/include/task.h:2640:62: warning: passing argument 2 of 'ulTaskGenericNotifyTake' makes integer from pointer without a cast [-Wint-conversion]
+ 2640 |     ulTaskGenericNotifyTake( ( tskDEFAULT_INDEX_TO_NOTIFY ), ( xClearCountOnExit ), ( xTicksToWait ) )
+      |                                                              ^~~~~~~~~~~~~~~~~~~~~
+      |                                                              |
+      |                                                              TaskHandle_t {aka struct tskTaskControlBlock *}
+../Core/Src/application_tasks.c:319:9: note: in expansion of macro 'ulTaskNotifyTake'
+  319 |         ulTaskNotifyTake(xSendCurrentAlarmTaskHandle, portMAX_DELAY);
+      |         ^~~~~~~~~~~~~~~~
+C:/Users/Viktor/Desktop/labaratorni/Projects/TS_Tracker/software/FreeRTOS/Source/include/task.h:2637:46: note: expected 'BaseType_t' {aka 'long int'} but argument is of type 'TaskHandle_t' {aka 'struct tskTaskControlBlock *'}
+ 2637 |                                   BaseType_t xClearCountOnExit,
+      |                                   ~~~~~~~~~~~^~~~~~~~~~~~~~~~~
+arm-none-eabi-gcc -o "software.elf" @"objects.list"   -mcpu=cortex-m4 -T"C:\Users\Viktor\Desktop\labaratorni\Projects\TS_Tracker\software\STM32F401RCTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="software.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -u _scanf_float -Wl,--start-group -lc -lm -Wl,--end-group
+Finished building target: software.elf
+ 
+arm-none-eabi-size  software.elf 
+arm-none-eabi-objdump -h -S software.elf  > "software.list"
+   text	   data	    bss	    dec	    hex	filename
+  59936	    488	  19944	  80368	  139f0	software.elf
+Finished building: default.size.stdout
+ 
+Finished building: software.list
+ 
+13:42:51 **** Incremental Build of configuration Debug for project software ****
+make -j4 all 
+arm-none-eabi-size  software.elf 
+   text	   data	    bss	    dec	    hex	filename
+  59936	    488	  19944	  80368	  139f0	software.elf
+Finished building: default.size.stdout
+ 
